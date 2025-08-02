@@ -1,0 +1,3 @@
+https://github.com/modelcontextprotocol/python-sdk
+こちらの情報を参考に、四則演算のMCPサーバーを作成してください。
+ファイル名はcalculator.pyとしてください。絶対パスを確認してからファイルを作成してください。

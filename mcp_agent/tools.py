@@ -1,3 +1,6 @@
+### MCP以外のツール群です。以下は公式ページから引用しています。
+### 使用する際には、tools=[get_weather, get_current_time]のように直接関数名を指定します。
+
 import datetime
 from zoneinfo import ZoneInfo
 
