@@ -1,2 +1,7 @@
 google-adk
 mcp[cli]
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+websockets
