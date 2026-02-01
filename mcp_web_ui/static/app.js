@@ -128,61 +128,191 @@ async function sendMessage() {
     setLoading(true);
     showTypingIndicator();
     
+    // ストリーミングモードで送信
+    await sendMessageStreaming(message);
+}
+
+// SSEを使ったストリーミング送信
+async function sendMessageStreaming(message) {
+    const params = new URLSearchParams({
+        message: message,
+        ...(sessionId && { session_id: sessionId })
+    });
+    
+    let currentToolContainer = null;
+    let responseText = '';
+    let assistantMessageDiv = null;
+    
     try {
-        const response = await fetch(`${API_BASE}/api/chat`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                message: message,
-                session_id: sessionId
-            })
-        });
+        const response = await fetch(`${API_BASE}/api/chat/stream?${params}`);
         
         if (!response.ok) {
-            // エラーレスポンスの詳細を取得
-            let errorDetail = `HTTP error! status: ${response.status}`;
-            try {
-                const errorData = await response.json();
-                if (errorData.detail) {
-                    errorDetail = errorData.detail;
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const text = decoder.decode(value, { stream: true });
+            const lines = text.split('\n');
+            
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try {
+                        const data = JSON.parse(line.slice(6));
+                        
+                        switch (data.type) {
+                            case 'session':
+                                sessionId = data.session_id;
+                                hasActiveSession = true;
+                                break;
+                                
+                            case 'tool_start':
+                                // タイピングインジケーター削除
+                                removeTypingIndicator();
+                                
+                                // ツール呼び出し開始を表示
+                                if (!currentToolContainer) {
+                                    currentToolContainer = document.createElement('div');
+                                    currentToolContainer.className = 'tool-calls-container';
+                                    chatArea.appendChild(currentToolContainer);
+                                }
+                                appendToolCallStart(currentToolContainer, data.name, data.arguments);
+                                chatArea.scrollTop = chatArea.scrollHeight;
+                                break;
+                                
+                            case 'tool_end':
+                                // ツール完了を更新
+                                updateToolCallEnd(currentToolContainer, data.name, data.result);
+                                chatArea.scrollTop = chatArea.scrollHeight;
+                                break;
+                                
+                            case 'text':
+                                // タイピングインジケーター削除
+                                removeTypingIndicator();
+                                
+                                responseText += data.content;
+                                
+                                // アシスタントメッセージを更新または作成
+                                if (!assistantMessageDiv) {
+                                    assistantMessageDiv = document.createElement('div');
+                                    assistantMessageDiv.className = 'message assistant';
+                                    chatArea.appendChild(assistantMessageDiv);
+                                }
+                                assistantMessageDiv.innerHTML = formatMessage(responseText);
+                                chatArea.scrollTop = chatArea.scrollHeight;
+                                break;
+                                
+                            case 'error':
+                                removeTypingIndicator();
+                                appendMessage(data.message, 'assistant', data.is_rate_limit ? 'warning' : 'error');
+                                break;
+                                
+                            case 'done':
+                                // ストリーミング完了
+                                currentToolContainer = null;
+                                loadServers();
+                                break;
+                        }
+                    } catch (parseError) {
+                        console.error('Error parsing SSE data:', parseError);
+                    }
                 }
-            } catch (e) {
-                // JSONパースエラーは無視
             }
-            throw new Error(errorDetail);
         }
-        
-        const data = await response.json();
-        sessionId = data.session_id;
-        hasActiveSession = true;
-        
-        // タイピングインジケーター削除
-        removeTypingIndicator();
-        
-        // ツール呼び出しがある場合は表示
-        if (data.tool_calls && data.tool_calls.length > 0) {
-            appendToolCalls(data.tool_calls);
-        }
-        
-        // アシスタントメッセージを表示
-        appendMessage(data.response, 'assistant');
-        
-        // サーバーリストを更新（MCPサーバーが作成された可能性がある）
-        loadServers();
         
     } catch (error) {
         console.error('Error:', error);
         removeTypingIndicator();
-        
-        // エラーメッセージの種類を判定
-        const errorMsg = error.message;
-        const isRateLimit = errorMsg.includes('レート制限') || errorMsg.includes('429') || errorMsg.includes('RESOURCE_EXHAUSTED');
-        
-        appendMessage(errorMsg, 'assistant', isRateLimit ? 'warning' : 'error');
+        appendMessage(error.message, 'assistant', 'error');
     } finally {
         setLoading(false);
+    }
+}
+
+// ツール呼び出し開始を表示（進行中スタイル）
+function appendToolCallStart(container, toolName, args) {
+    const toolDiv = document.createElement('div');
+    toolDiv.className = 'tool-call running';
+    toolDiv.dataset.toolName = toolName;
+    
+    const header = document.createElement('div');
+    header.className = 'tool-call-header';
+    header.innerHTML = `
+        <span class="tool-icon">
+            <span class="tool-spinner"></span>
+        </span>
+        <span class="tool-name">${escapeHtml(toolName)}</span>
+        <span class="tool-status">実行中...</span>
+        <span class="tool-toggle">▼</span>
+    `;
+    header.onclick = () => {
+        const details = toolDiv.querySelector('.tool-call-details');
+        const toggle = header.querySelector('.tool-toggle');
+        if (details.classList.contains('open')) {
+            details.classList.remove('open');
+            toggle.textContent = '▼';
+        } else {
+            details.classList.add('open');
+            toggle.textContent = '▲';
+        }
+    };
+    
+    const details = document.createElement('div');
+    details.className = 'tool-call-details';
+    
+    // 引数
+    const argsSection = document.createElement('div');
+    argsSection.className = 'tool-section';
+    argsSection.innerHTML = `
+        <div class="tool-section-title">引数:</div>
+        <pre class="tool-content">${escapeHtml(JSON.stringify(args, null, 2))}</pre>
+    `;
+    details.appendChild(argsSection);
+    
+    // 結果プレースホルダー
+    const resultSection = document.createElement('div');
+    resultSection.className = 'tool-section tool-result-section';
+    resultSection.innerHTML = `
+        <div class="tool-section-title">結果:</div>
+        <pre class="tool-content tool-result-placeholder">実行中...</pre>
+    `;
+    details.appendChild(resultSection);
+    
+    toolDiv.appendChild(header);
+    toolDiv.appendChild(details);
+    container.appendChild(toolDiv);
+}
+
+// ツール完了を更新
+function updateToolCallEnd(container, toolName, result) {
+    if (!container) return;
+    
+    const toolDiv = container.querySelector(`.tool-call[data-tool-name="${toolName}"]`);
+    if (!toolDiv) return;
+    
+    // 進行中スタイルを削除
+    toolDiv.classList.remove('running');
+    toolDiv.classList.add('completed');
+    
+    // ヘッダーのアイコンとステータスを更新
+    const header = toolDiv.querySelector('.tool-call-header');
+    const iconSpan = header.querySelector('.tool-icon');
+    iconSpan.innerHTML = '✅';
+    
+    const statusSpan = header.querySelector('.tool-status');
+    statusSpan.textContent = '完了';
+    statusSpan.classList.add('success');
+    
+    // 結果を更新
+    const resultPlaceholder = toolDiv.querySelector('.tool-result-placeholder');
+    if (resultPlaceholder) {
+        resultPlaceholder.classList.remove('tool-result-placeholder');
+        resultPlaceholder.textContent = formatToolResult(result);
     }
 }
 
@@ -389,6 +519,9 @@ async function loadServers() {
                     <button class="btn-icon" onclick="viewServer('${server.name}')" title="コードを表示">
                         📝
                     </button>
+                    <button class="btn-icon" onclick="scanServer('${server.name}')" title="セキュリティスキャン">
+                        🔍
+                    </button>
                     <button class="btn-icon" onclick="toggleServer('${server.name}', ${server.active})" title="${server.active ? '停止' : '起動'}">
                         ${server.active ? '⏹️' : '▶️'}
                     </button>
@@ -476,6 +609,101 @@ async function deleteServer(name) {
     } catch (error) {
         console.error('Error deleting server:', error);
         alert('サーバーの削除に失敗しました');
+    }
+}
+
+// サーバーのセキュリティスキャン
+async function scanServer(name) {
+    try {
+        // ローディング表示
+        appendMessage('🔍 セキュリティスキャンを実行中...', 'assistant', 'loading');
+        
+        const response = await fetch(`${API_BASE}/api/servers/${name}/scan`, {
+            method: 'POST'
+        });
+        
+        if (!response.ok) {
+            throw new Error('Scan failed');
+        }
+        
+        const result = await response.json();
+        
+        // ローディングメッセージを削除
+        const loadingMsg = chatArea.querySelector('.message.loading:last-child');
+        if (loadingMsg) {
+            loadingMsg.remove();
+        }
+        
+        // スキャン結果を表示
+        displayScanResult(result);
+        
+    } catch (error) {
+        console.error('Error scanning server:', error);
+        
+        // ローディングメッセージを削除
+        const loadingMsg = chatArea.querySelector('.message.loading:last-child');
+        if (loadingMsg) {
+            loadingMsg.remove();
+        }
+        
+        appendMessage('❌ セキュリティスキャンに失敗しました', 'assistant');
+    }
+}
+
+// スキャン結果を表示
+function displayScanResult(result) {
+    const severityEmoji = {
+        'SAFE': '✅',
+        'LOW': '🔵',
+        'MEDIUM': '🟡',
+        'HIGH': '🔴'
+    };
+    
+    let message = `## ${severityEmoji[result.severity]} セキュリティスキャン結果\n\n`;
+    message += `**サーバー:** ${result.server_name}\n\n`;
+    message += `**判定:** ${result.severity}\n\n`;
+    message += `**サマリー:** ${result.summary}\n\n`;
+    
+    // 旧形式の表示も残す（互換性のため）
+    if (result.findings && result.findings.length > 0) {
+        message += `### 検出された問題 (${result.findings.length}件)\n\n`;
+        
+        result.findings.forEach((finding, index) => {
+            const sev = finding.severity || 'UNKNOWN';
+            message += `${index + 1}. **${severityEmoji[sev] || '⚪'} ${finding.pattern || finding.tool_name || '不明'}**\n`;
+            message += `   - 説明: ${finding.description || 'N/A'}\n`;
+            message += `   - 深刻度: ${sev}\n`;
+            
+            if (finding.lines && finding.lines.length > 0) {
+                message += `   - 検出行: ${finding.lines.join(', ')}\n`;
+            }
+            
+            message += '\n';
+        });
+    }
+    
+    // メッセージを表示
+    appendMessage(message, 'assistant');
+    
+    // 生のスキャン結果を折り畳み可能なセクションとして追加
+    if (result.raw_results && result.raw_results.length > 0) {
+        const jsonStr = JSON.stringify(result.raw_results, null, 2);
+        const detailsHtml = `
+            <div class="scan-result-details">
+                <details>
+                    <summary style="cursor: pointer; padding: 10px; background: #f5f5f5; border-radius: 4px; margin: 10px 0;">
+                        <strong>📊 詳細スキャン結果 (JSON)</strong> - クリックして展開
+                    </summary>
+                    <pre style="background: #2d2d2d; color: #f8f8f2; padding: 15px; border-radius: 4px; overflow-x: auto; margin-top: 10px;"><code class="language-json">${escapeHtml(jsonStr)}</code></pre>
+                </details>
+            </div>
+        `;
+        
+        const detailsDiv = document.createElement('div');
+        detailsDiv.className = 'message assistant';
+        detailsDiv.innerHTML = detailsHtml;
+        chatArea.appendChild(detailsDiv);
+        chatArea.scrollTop = chatArea.scrollHeight;
     }
 }
 

@@ -5,3 +5,4 @@ uvicorn[standard]
 jinja2
 python-multipart
 websockets
+cisco-ai-mcp-scanner

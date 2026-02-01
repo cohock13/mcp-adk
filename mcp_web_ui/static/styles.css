@@ -611,6 +611,76 @@ body {
     border: 1px solid #f59e0b;
     border-radius: 12px;
     overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+/* ツール実行中のスタイル */
+.tool-call.running {
+    background: linear-gradient(135deg, #dbeafe, #bfdbfe);
+    border: 1px solid #3b82f6;
+    animation: tool-pulse 2s ease-in-out infinite;
+}
+
+.tool-call.running .tool-name {
+    color: #1e40af;
+}
+
+.tool-call.running .tool-status {
+    color: #3b82f6;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+/* ツール完了のスタイル */
+.tool-call.completed {
+    background: linear-gradient(135deg, #d1fae5, #a7f3d0);
+    border: 1px solid #10b981;
+}
+
+.tool-call.completed .tool-name {
+    color: #065f46;
+}
+
+.tool-call.completed .tool-status {
+    color: #10b981;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.tool-call.completed .tool-status.success {
+    color: #059669;
+}
+
+/* ツールスピナー */
+.tool-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid #3b82f6;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: tool-spin 0.8s linear infinite;
+}
+
+@keyframes tool-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes tool-pulse {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
+    }
+}
+
+/* 結果プレースホルダー */
+.tool-result-placeholder {
+    color: #6b7280;
+    font-style: italic;
 }
 
 .tool-call-header {
@@ -626,8 +696,20 @@ body {
     background: rgba(245, 158, 11, 0.2);
 }
 
+.tool-call.running .tool-call-header:hover {
+    background: rgba(59, 130, 246, 0.2);
+}
+
+.tool-call.completed .tool-call-header:hover {
+    background: rgba(16, 185, 129, 0.2);
+}
+
 .tool-icon {
     font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
 }
 
 .tool-name {
@@ -636,10 +718,23 @@ body {
     flex: 1;
 }
 
+.tool-status {
+    font-size: 0.75rem;
+    margin-right: 8px;
+}
+
 .tool-toggle {
     color: #92400e;
     font-size: 0.75rem;
     transition: transform 0.2s ease;
+}
+
+.tool-call.running .tool-toggle {
+    color: #1e40af;
+}
+
+.tool-call.completed .tool-toggle {
+    color: #065f46;
 }
 
 .tool-call-details {

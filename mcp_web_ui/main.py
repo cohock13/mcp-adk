@@ -1,6 +1,7 @@
 """FastAPI メインアプリケーション"""
 import asyncio
 import uuid
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from contextlib import asynccontextmanager
@@ -8,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.requests import Request
 from pydantic import BaseModel
 
@@ -19,6 +20,7 @@ from google.genai import types
 from .agent import create_mcp_creator_agent
 from .mcp_manager import mcp_manager
 from .config import AGENT_MODEL
+from .security_scanner import get_scanner, ScanResult
 
 
 # セッション管理
@@ -75,6 +77,19 @@ class MCPServerInfo(BaseModel):
     active: bool
 
 
+class SecurityScanRequest(BaseModel):
+    server_name: str
+
+
+class SecurityScanResponse(BaseModel):
+    server_name: str
+    is_safe: bool
+    severity: str
+    findings: List[Dict[str, Any]]
+    summary: str
+    raw_results: Optional[List[Dict[str, Any]]] = None  # 生のスキャン結果
+
+
 # ルート
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -129,6 +144,31 @@ async def deactivate_server(server_name: str):
     raise HTTPException(status_code=404, detail="Server not active")
 
 
+@app.post("/api/servers/{server_name}/scan", response_model=SecurityScanResponse)
+async def scan_server(server_name: str):
+    """MCPサーバーのセキュリティスキャンを実行"""
+    # サーバーファイルのパスを取得
+    server_path = mcp_manager.servers_dir / f"{server_name}.py"
+    
+    if not server_path.exists():
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    # スキャナーを取得（YARAのみ使用 = APIキー不要）
+    scanner = get_scanner(use_api=False, use_llm=False)
+    
+    # スキャン実行
+    result = await scanner.scan_server_code(server_path)
+    
+    return SecurityScanResponse(
+        server_name=server_name,
+        is_safe=result.is_safe,
+        severity=result.severity,
+        findings=result.findings,
+        summary=result.summary,
+        raw_results=result.raw_results  # 生データを含める
+    )
+
+
 async def run_agent_turn(runner: Runner, session_id: str, user_id: str, message: str) -> tuple[str, List[ToolCall]]:
     """エージェントのターンを実行"""
     content = types.Content(
@@ -178,7 +218,7 @@ async def run_agent_turn(runner: Runner, session_id: str, user_id: str, message:
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(chat_message: ChatMessage):
-    """チャットエンドポイント"""
+    """チャットエンドポイント（非ストリーミング - 互換性のため残す）"""
     session_id = chat_message.session_id or str(uuid.uuid4())
     user_id = "web_user"
     
@@ -244,6 +284,118 @@ async def chat(chat_message: ChatMessage):
             raise HTTPException(status_code=429, detail=error_message)
         
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def stream_agent_response(runner: Runner, session_id: str, user_id: str, message: str):
+    """エージェントのレスポンスをストリーミングで返すジェネレータ"""
+    content = types.Content(
+        role="user",
+        parts=[types.Part.from_text(text=message)]
+    )
+    
+    pending_tool_calls = {}  # name -> arguments
+    
+    async for event in runner.run_async(
+        user_id=user_id,
+        session_id=session_id,
+        new_message=content
+    ):
+        # ツール呼び出しの検出
+        if hasattr(event, 'content') and event.content and event.content.parts:
+            for part in event.content.parts:
+                # function_callの検出（ツール呼び出し開始）
+                if hasattr(part, 'function_call') and part.function_call:
+                    fc = part.function_call
+                    tool_name = fc.name if hasattr(fc, 'name') else str(fc)
+                    tool_args = dict(fc.args) if hasattr(fc, 'args') and fc.args else {}
+                    pending_tool_calls[tool_name] = tool_args
+                    
+                    # ツール呼び出し開始イベントを送信
+                    yield f"data: {json.dumps({'type': 'tool_start', 'name': tool_name, 'arguments': tool_args}, ensure_ascii=False)}\n\n"
+                
+                # function_responseの検出（ツール実行完了）
+                if hasattr(part, 'function_response') and part.function_response:
+                    fr = part.function_response
+                    tool_name = fr.name if hasattr(fr, 'name') else 'unknown'
+                    tool_result = str(fr.response) if hasattr(fr, 'response') else str(fr)
+                    
+                    # 対応するツール呼び出しを取得
+                    tool_args = pending_tool_calls.pop(tool_name, {})
+                    
+                    # ツール完了イベントを送信
+                    yield f"data: {json.dumps({'type': 'tool_end', 'name': tool_name, 'arguments': tool_args, 'result': tool_result}, ensure_ascii=False)}\n\n"
+                
+                # テキストレスポンス
+                if hasattr(part, 'text') and part.text:
+                    yield f"data: {json.dumps({'type': 'text', 'content': part.text}, ensure_ascii=False)}\n\n"
+    
+    # 完了イベント
+    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+
+@app.get("/api/chat/stream")
+async def chat_stream(message: str, session_id: Optional[str] = None):
+    """ストリーミングチャットエンドポイント（SSE）"""
+    session_id = session_id or str(uuid.uuid4())
+    user_id = "web_user"
+    
+    # セッションが存在しない場合は新規作成
+    if session_id not in sessions:
+        # アクティブなMCPサーバーを取得してエージェントに追加
+        additional_tools = mcp_manager.get_all_tools()
+        agent = create_mcp_creator_agent(additional_tools if additional_tools else None)
+        
+        # セッションを作成（非同期）
+        await session_service.create_session(
+            app_name="mcp_creator",
+            user_id=user_id,
+            session_id=session_id
+        )
+        
+        # Runnerを作成
+        runner = Runner(
+            agent=agent,
+            app_name="mcp_creator",
+            session_service=session_service
+        )
+        sessions[session_id] = runner
+    
+    runner = sessions[session_id]
+    
+    async def generate():
+        # まずセッションIDを送信
+        yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
+        
+        try:
+            async for chunk in stream_agent_response(runner, session_id, user_id, message):
+                yield chunk
+        except Exception as e:
+            import traceback
+            import re
+            traceback.print_exc()
+            
+            error_str = str(e)
+            
+            # レート制限エラーの検出と分かりやすいメッセージへの変換
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                # リトライ時間を抽出
+                retry_match = re.search(r'retry\s*(?:in|Delay["\']?\s*:\s*["\']?)(\d+(?:\.\d+)?)', error_str, re.IGNORECASE)
+                retry_seconds = retry_match.group(1) if retry_match else "不明"
+                
+                error_message = f"⚠️ **APIレート制限に達しました**\n\n再試行可能時間: 約 {retry_seconds} 秒後"
+                yield f"data: {json.dumps({'type': 'error', 'message': error_message, 'is_rate_limit': True})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e), 'is_rate_limit': False})}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 
 
 @app.post("/api/chat/reset")
