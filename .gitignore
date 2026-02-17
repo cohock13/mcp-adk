@@ -1,3 +1,28 @@
-.venv
-.adk
-__pycache__
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+.docker/
+
+# Data (永続化データ)
+data/registry/
+data/build_workspace/
+data/server_configs/*.json
+
+# Logs
+*.log
+
+# ADK
+.adk/
+
+# tmp
+tmp/

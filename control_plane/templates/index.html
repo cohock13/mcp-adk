@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Container Control Plane</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <!-- Markdown / Syntax Highlight -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.1/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/python.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/json.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- サイドバー -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>🔧 MCP Containers</h2>
+            </div>
+            <div class="sidebar-content">
+                <ul class="container-list" id="containerList">
+                    <li class="text-secondary">読み込み中...</li>
+                </ul>
+                <button class="btn btn-secondary btn-home" id="btnHome">
+                    🏠 Home
+                </button>
+            </div>
+        </aside>
+
+        <!-- メインコンテンツ -->
+        <main class="main-content">
+            <!-- ヘッダー -->
+            <header class="header">
+                <h1 id="headerTitle">🚀 MCP Container Creator</h1>
+                <div class="header-actions">
+                    <span class="status-badge" id="statusBadge">Ready</span>
+                </div>
+            </header>
+
+            <!-- メインエリア -->
+            <div class="main-area" id="mainArea">
+                <!-- チャットエリア（メイン画面） -->
+                <div class="chat-area" id="chatArea">
+                    <div class="welcome-message">
+                        <h3>🚀 MCP Container Creator</h3>
+                        <p>AIとの対話でMCPサーバーコンテナを作成できます。</p>
+                        <div class="suggestions">
+                            <div class="suggestion" onclick="sendSuggestion(this)">🧮 四則演算のMCPサーバーを作成して</div>
+                            <div class="suggestion" onclick="sendSuggestion(this)">🌤️ 天気取得APIのMCPを作って</div>
+                            <div class="suggestion" onclick="sendSuggestion(this)">📊 グラフ出力MCPを作成して</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- コンテナ詳細エリア（コンテナ画面） -->
+                <div class="container-detail" id="containerDetail" style="display: none;">
+                    <div class="tabs">
+                        <button class="tab active" data-tab="chat">💬 Chat</button>
+                        <button class="tab" data-tab="tools">🔧 Tools</button>
+                        <button class="tab" data-tab="code">📝 Code</button>
+                        <button class="tab" data-tab="logs">📋 Logs</button>
+                    </div>
+                    <div class="tab-content" id="tabContent">
+                        <!-- タブ内容 -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- 入力エリア -->
+            <div class="input-area">
+                <textarea
+                    class="chat-input"
+                    id="chatInput"
+                    placeholder="メッセージを入力... (Enterで送信)"
+                    rows="1"
+                ></textarea>
+                <button class="btn btn-primary" id="sendBtn">
+                    送信
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <!-- Snackbar -->
+    <div id="snackbar" class="snackbar"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,74 @@
+services:
+  # ===== Control Plane =====
+  control-plane:
+    build:
+      context: .
+      dockerfile: docker/control-plane/Dockerfile
+    container_name: mcp-control-plane
+    ports:
+      - "8000:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./data:/app/data
+    environment:
+      - REGISTRY_URL=registry:5000
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - AGENT_MODEL=${AGENT_MODEL:-gemini-2.5-flash}
+    networks:
+      - mcp-control
+      - mcp-internal
+    depends_on:
+      - registry
+      - squid
+    restart: unless-stopped
+
+  # ===== Squid Proxy =====
+  squid:
+    image: ubuntu/squid:latest
+    container_name: mcp-squid
+    volumes:
+      - ./data/squid/squid.conf:/etc/squid/squid.conf:ro
+      - ./data/squid/whitelist:/etc/squid/whitelist:ro
+    networks:
+      - mcp-internal
+      - mcp-external
+    restart: unless-stopped
+
+  # ===== Private Registry =====
+  registry:
+    image: registry:2
+    container_name: mcp-registry
+    volumes:
+      - ./data/registry:/var/lib/registry
+    networks:
+      - mcp-control
+    restart: unless-stopped
+
+  # ===== Trivy Scanner =====
+  trivy:
+    image: aquasec/trivy:latest
+    container_name: mcp-trivy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - trivy-cache:/root/.cache/
+    networks:
+      - mcp-control
+    entrypoint: ["tail", "-f", "/dev/null"]
+    restart: unless-stopped
+
+networks:
+  mcp-control:
+    name: mcp-control
+
+  mcp-internal:
+    name: mcp-internal
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+  mcp-external:
+    name: mcp-external
+
+volumes:
+  trivy-cache:

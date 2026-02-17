@@ -1,0 +1,830 @@
+/**
+ * MCP Container Control Plane - Frontend JavaScript
+ */
+
+// State
+let currentContainer = null;
+let containers = [];
+let pollTimer = null;
+let isSending = false;
+let pendingSpec = null;  // 最後のビルド仕様
+let activeEventSource = null;  // 現在のSSE接続
+
+// DOM Elements
+const containerList = document.getElementById('containerList');
+const chatArea = document.getElementById('chatArea');
+const containerDetail = document.getElementById('containerDetail');
+const chatInput = document.getElementById('chatInput');
+const sendBtn = document.getElementById('sendBtn');
+const headerTitle = document.getElementById('headerTitle');
+const btnHome = document.getElementById('btnHome');
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    loadContainers();
+    setupEventListeners();
+    pollTimer = setInterval(loadContainers, 10000);
+});
+
+function setupEventListeners() {
+    sendBtn.addEventListener('click', sendMessage);
+
+    chatInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    chatInput.addEventListener('input', () => {
+        chatInput.style.height = 'auto';
+        chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
+    });
+
+    btnHome.addEventListener('click', showMainScreen);
+
+    document.querySelectorAll('.tab').forEach(tab => {
+        tab.addEventListener('click', () => switchTab(tab.dataset.tab));
+    });
+}
+
+// ===== コンテナ一覧 =====
+
+async function loadContainers() {
+    try {
+        const response = await fetch('/api/containers');
+        if (response.ok) {
+            containers = await response.json();
+            renderContainerList();
+        }
+    } catch (error) {
+        console.log('Containers API not ready yet');
+        containerList.innerHTML = '<li class="text-secondary">コンテナなし</li>';
+    }
+}
+
+function renderContainerList() {
+    if (containers.length === 0) {
+        containerList.innerHTML = '<li class="text-secondary">コンテナなし</li>';
+        return;
+    }
+
+    containerList.innerHTML = containers.map(c => {
+        const statusIcon = {
+            running: '🟢', stopped: '⚪', building: '🔨', error: '🔴', not_found: '⚪'
+        }[c.status] || '⚪';
+        return `
+            <li class="container-item ${currentContainer === c.name ? 'active' : ''}"
+                onclick="selectContainer('${c.name}')">
+                <span>${statusIcon}</span>
+                <span>${c.name}</span>
+            </li>`;
+    }).join('');
+}
+
+function selectContainer(name) {
+    currentContainer = name;
+    showContainerDetail(name);
+    renderContainerList();
+}
+
+// ===== 画面切替 =====
+
+function showMainScreen() {
+    currentContainer = null;
+    headerTitle.textContent = '🚀 MCP Container Creator';
+    chatArea.style.display = 'flex';
+    containerDetail.style.display = 'none';
+    const statusBadge = document.getElementById('statusBadge');
+    if (statusBadge) {
+        statusBadge.textContent = 'Ready';
+        statusBadge.className = 'status-badge';
+    }
+    chatInput.placeholder = 'メッセージを入力... (Enterで送信)';
+    renderContainerList();
+}
+
+function showContainerDetail(name) {
+    headerTitle.textContent = '📦 ' + name;
+    chatArea.style.display = 'none';
+    containerDetail.style.display = 'flex';
+    chatInput.placeholder = `${name} に対する修正指示を入力...`;
+    switchTab('chat');
+    loadContainerActions(name);
+}
+
+// ===== タブ =====
+
+function switchTab(tabName) {
+    document.querySelectorAll('.tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === tabName);
+    });
+
+    const tabContent = document.getElementById('tabContent');
+    if (!currentContainer) return;
+
+    switch (tabName) {
+        case 'chat':
+            loadChatTab(currentContainer, tabContent);
+            break;
+        case 'tools':
+            loadToolsTab(currentContainer, tabContent);
+            break;
+        case 'code':
+            loadCodeTab(currentContainer, tabContent);
+            break;
+        case 'logs':
+            loadLogsTab(currentContainer, tabContent);
+            break;
+    }
+}
+
+// ===== コンテナ操作 =====
+
+function loadContainerActions(name) {
+    const container = containers.find(c => c.name === name);
+    if (!container) return;
+
+    const statusBadge = document.getElementById('statusBadge');
+    if (statusBadge) {
+        statusBadge.textContent = container.status;
+        statusBadge.className = `status-badge ${container.status}`;
+    }
+}
+
+async function containerAction(name, action) {
+    try {
+        const method = action === 'delete' ? 'DELETE' : 'POST';
+        const url = action === 'delete'
+            ? `/api/containers/${name}`
+            : `/api/containers/${name}/${action}`;
+        const resp = await fetch(url, { method });
+        if (resp.ok) {
+            await loadContainers();
+            if (action === 'delete') {
+                showMainScreen();
+            } else if (currentContainer === name) {
+                showContainerDetail(name);
+            }
+        } else {
+            const err = await resp.json();
+            alert(err.detail || 'エラーが発生しました');
+        }
+    } catch (e) {
+        alert('通信エラー: ' + e.message);
+    }
+}
+
+// ===== Chat タブ（コンテナ編集チャット） =====
+
+function loadChatTab(name, tabContent) {
+    tabContent.innerHTML = `
+        <div class="container-chat-area" id="containerChatArea">
+            <div class="welcome-message" id="editWelcome">
+                <h3>💬 ${escapeHtml(name)} を編集</h3>
+                <p>AIに修正を依頼できます。コードの変更は自動的にビルド＆デプロイされます。</p>
+                <div class="suggestions">
+                    <div class="edit-suggestion" onclick="sendEditSuggestion(this)">🛡️ エラーハンドリングを強化して</div>
+                    <div class="edit-suggestion" onclick="sendEditSuggestion(this)">📝 ツールの説明を詳しくして</div>
+                    <div class="edit-suggestion" onclick="sendEditSuggestion(this)">➕ 新しいツールを追加して</div>
+                </div>
+            </div>
+        </div>
+        <div class="container-actions-bar">
+            <button class="btn btn-secondary btn-sm" onclick="containerAction('${escapeHtml(name)}', 'start')">▶️ 起動</button>
+            <button class="btn btn-secondary btn-sm" onclick="containerAction('${escapeHtml(name)}', 'stop')">⏹️ 停止</button>
+            <button class="btn btn-danger btn-sm" onclick="if(confirm('本当に削除しますか？')) containerAction('${escapeHtml(name)}', 'delete')">🗑️ 削除</button>
+        </div>`;
+}
+
+function sendEditSuggestion(el) {
+    chatInput.value = el.textContent.replace(/^[^\s]+\s/, '');
+    sendMessage();
+}
+
+// ===== Tools タブ（Swagger 風テスト UI） =====
+
+async function loadToolsTab(name, tabContent) {
+    tabContent.innerHTML = '<p class="text-secondary text-center" style="padding:40px;">🔧 ツール読み込み中...</p>';
+    try {
+        const resp = await fetch(`/api/containers/${name}/tools`);
+        if (!resp.ok) {
+            tabContent.innerHTML = '<p class="text-secondary text-center" style="padding:40px;">ツール情報を取得できませんでした</p>';
+            return;
+        }
+        const data = await resp.json();
+        const tools = data.tools || [];
+
+        if (tools.length === 0) {
+            tabContent.innerHTML = '<p class="text-secondary text-center" style="padding:40px;">ツールが見つかりませんでした</p>';
+            return;
+        }
+
+        tabContent.innerHTML = `
+            <div class="tools-list">
+                ${tools.map((tool, idx) => renderToolCard(name, tool, idx)).join('')}
+            </div>`;
+
+    } catch (e) {
+        tabContent.innerHTML = `<p class="text-secondary text-center" style="padding:40px;">❌ エラー: ${escapeHtml(e.message)}</p>`;
+    }
+}
+
+function renderToolCard(containerName, tool, idx) {
+    const paramsHtml = (tool.parameters || []).map(p => `
+        <div class="tool-param">
+            <label>${escapeHtml(p.name)} <span class="param-type">(${escapeHtml(p.type)})</span></label>
+            <input type="text" class="tool-input" id="param_${idx}_${p.name}"
+                   placeholder="${escapeHtml(p.type)}" data-type="${escapeHtml(p.type)}">
+        </div>
+    `).join('');
+
+    return `
+        <div class="tool-card">
+            <div class="tool-header">
+                <span class="tool-name">🔧 ${escapeHtml(tool.name)}</span>
+                <span class="tool-method">POST</span>
+            </div>
+            <p class="tool-desc">${escapeHtml(tool.description || 'No description')}</p>
+            ${paramsHtml ? `<div class="tool-params">${paramsHtml}</div>` : ''}
+            <div class="tool-actions">
+                <button class="btn btn-primary btn-sm"
+                        onclick="executeTool('${escapeHtml(containerName)}', '${escapeHtml(tool.name)}', ${idx}, ${JSON.stringify(tool.parameters || []).replace(/"/g, '&quot;')})">
+                    ▶ 実行
+                </button>
+                <div class="tool-result" id="toolResult_${idx}" style="display:none;"></div>
+            </div>
+        </div>`;
+}
+
+async function executeTool(containerName, toolName, idx, params) {
+    const resultDiv = document.getElementById(`toolResult_${idx}`);
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'tool-result loading';
+    resultDiv.textContent = '⏳ 実行中...';
+
+    const args = {};
+    for (const p of params) {
+        const input = document.getElementById(`param_${idx}_${p.name}`);
+        if (input && input.value) {
+            let val = input.value;
+            if (p.type === 'float' || p.type === 'int') {
+                val = Number(val);
+            } else if (p.type === 'bool') {
+                val = val.toLowerCase() === 'true';
+            }
+            args[p.name] = val;
+        }
+    }
+
+    try {
+        const resp = await fetch(`/api/containers/${containerName}/tools/${toolName}/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ args }),
+        });
+        const data = await resp.json();
+
+        if (data.error) {
+            resultDiv.className = 'tool-result error';
+            resultDiv.textContent = `❌ ${data.error}`;
+        } else {
+            resultDiv.className = 'tool-result success';
+            resultDiv.textContent = `✅ 結果: ${JSON.stringify(data.result, null, 2)}`;
+        }
+    } catch (e) {
+        resultDiv.className = 'tool-result error';
+        resultDiv.textContent = `❌ 通信エラー: ${e.message}`;
+    }
+}
+
+// ===== Code タブ =====
+
+async function loadCodeTab(name, tabContent) {
+    tabContent.innerHTML = '<p class="text-secondary">読み込み中...</p>';
+    try {
+        const resp = await fetch(`/api/containers/${name}/code`);
+        const data = await resp.json();
+        tabContent.innerHTML = `
+            <div style="display:flex;flex-direction:column;height:100%;gap:8px;padding:8px;">
+                <textarea id="codeEditor" style="flex:1;font-family:'Fira Code',monospace;font-size:13px;
+                    background:#1e1e2e;color:#cdd6f4;border:1px solid var(--border-color);border-radius:8px;
+                    padding:12px;resize:none;tab-size:4;">${escapeHtml(data.code || '# コードなし')}</textarea>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn btn-primary btn-sm" onclick="saveCode('${name}')">💾 保存のみ</button>
+                    <button class="btn btn-success btn-sm" onclick="saveAndRebuild('${name}')">🚀 保存 & 再ビルド</button>
+                </div>
+            </div>`;
+    } catch (e) {
+        tabContent.innerHTML = '<p class="text-secondary">コード取得エラー</p>';
+    }
+}
+
+async function saveCode(name) {
+    const code = document.getElementById('codeEditor').value;
+    try {
+        const resp = await fetch(`/api/containers/${name}/code`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+        });
+        if (resp.ok) alert('コードを保存しました');
+        else {
+            const err = await resp.json();
+            alert(err.detail || '保存エラー');
+        }
+    } catch (e) {
+        alert('通信エラー: ' + e.message);
+    }
+}
+
+async function saveAndRebuild(name) {
+    const code = document.getElementById('codeEditor').value;
+    try {
+        const saveResp = await fetch(`/api/containers/${name}/code`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+        });
+        if (!saveResp.ok) {
+            const err = await saveResp.json();
+            alert(err.detail || '保存エラー');
+            return;
+        }
+
+        const configResp = await fetch(`/api/containers/${name}`);
+        const config = await configResp.json();
+
+        const buildResp = await fetch(`/api/build/${name}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                code: code,
+                dependencies: config.dependencies || [],
+                whitelist: config.whitelist || [],
+                description: config.description || '',
+            }),
+        });
+
+        if (buildResp.ok) {
+            switchTab('chat');
+            const chatAreaEl = document.getElementById('containerChatArea');
+            if (chatAreaEl) {
+                const welcome = chatAreaEl.querySelector('.welcome-message');
+                if (welcome) welcome.remove();
+                addContainerMessage(chatAreaEl, `🔨 コード変更による再ビルドを開始: ${name}`, 'assistant');
+                monitorContainerBuild(name, chatAreaEl);
+            }
+        } else {
+            const err = await buildResp.json();
+            alert(err.detail || 'ビルド開始エラー');
+        }
+    } catch (e) {
+        alert('通信エラー: ' + e.message);
+    }
+}
+
+// ===== Logs タブ =====
+
+async function loadLogsTab(name, tabContent) {
+    tabContent.innerHTML = '<p class="text-secondary">読み込み中...</p>';
+    try {
+        const resp = await fetch(`/api/containers/${name}/logs?tail=200`);
+        const data = await resp.json();
+        tabContent.innerHTML = `
+            <div style="height:100%;overflow:auto;padding:8px;">
+                <pre class="log-viewer">${escapeHtml(data.logs || 'ログなし')}</pre>
+                <button class="btn btn-secondary btn-sm" style="margin-top:8px;" onclick="loadLogsTab('${name}', document.getElementById('tabContent'))">
+                    🔄 更新
+                </button>
+            </div>`;
+    } catch (e) {
+        tabContent.innerHTML = '<p class="text-secondary">ログ取得エラー</p>';
+    }
+}
+
+// ===== メッセージ送信（メイン / コンテナ両対応） =====
+
+async function sendMessage() {
+    const message = chatInput.value.trim();
+    if (!message || isSending) return;
+
+    if (currentContainer) {
+        sendContainerMessage(message);
+    } else {
+        sendMainMessage(message);
+    }
+}
+
+// ===== メイン画面チャット (AI SSE) =====
+
+async function sendMainMessage(message) {
+    isSending = true;
+    sendBtn.disabled = true;
+    pendingSpec = null;
+
+    const welcomeMsg = chatArea.querySelector('.welcome-message');
+    if (welcomeMsg) welcomeMsg.remove();
+
+    addMessage(message, 'user');
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+
+    const assistantDiv = document.createElement('div');
+    assistantDiv.className = 'message assistant';
+    chatArea.appendChild(assistantDiv);
+
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'typing-indicator';
+    typingDiv.innerHTML = '<span></span><span></span><span></span>';
+    assistantDiv.appendChild(typingDiv);
+    scrollToBottom();
+
+    try {
+        const encodedMsg = encodeURIComponent(message);
+        const eventSource = new EventSource(`/api/chat/stream?message=${encodedMsg}`);
+        let firstChunk = true;
+
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'text') {
+                if (firstChunk) {
+                    assistantDiv.innerHTML = '';
+                    firstChunk = false;
+                }
+                appendTextToMessage(assistantDiv, data.content);
+                scrollToBottom();
+            }
+
+            if (data.type === 'build_ready') {
+                pendingSpec = data.spec;
+                showBuildButton(assistantDiv, data.spec);
+            }
+
+            if (data.type === 'error') {
+                if (firstChunk) assistantDiv.innerHTML = '';
+                assistantDiv.classList.add('error');
+                assistantDiv.textContent = data.content;
+            }
+
+            if (data.type === 'done') {
+                eventSource.close();
+                isSending = false;
+                sendBtn.disabled = false;
+            }
+        };
+
+        eventSource.onerror = () => {
+            eventSource.close();
+            if (firstChunk) {
+                assistantDiv.innerHTML = '';
+                assistantDiv.classList.add('error');
+                assistantDiv.textContent = '❌ 接続エラーが発生しました。GOOGLE_API_KEY が設定されているか確認してください。';
+            }
+            isSending = false;
+            sendBtn.disabled = false;
+        };
+
+    } catch (e) {
+        assistantDiv.innerHTML = '';
+        assistantDiv.classList.add('error');
+        assistantDiv.textContent = '❌ エラー: ' + e.message;
+        isSending = false;
+        sendBtn.disabled = false;
+    }
+}
+
+// ===== コンテナ編集チャット =====
+
+async function sendContainerMessage(message) {
+    isSending = true;
+    sendBtn.disabled = true;
+
+    const chatAreaEl = document.getElementById('containerChatArea');
+    if (!chatAreaEl) return;
+
+    const welcomeMsg = chatAreaEl.querySelector('.welcome-message');
+    if (welcomeMsg) welcomeMsg.remove();
+
+    addContainerMessage(chatAreaEl, message, 'user');
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+
+    const assistantDiv = document.createElement('div');
+    assistantDiv.className = 'message assistant';
+    chatAreaEl.appendChild(assistantDiv);
+
+    const typingDiv = document.createElement('div');
+    typingDiv.className = 'typing-indicator';
+    typingDiv.innerHTML = '<span></span><span></span><span></span>';
+    assistantDiv.appendChild(typingDiv);
+    scrollContainerChat(chatAreaEl);
+
+    try {
+        const name = currentContainer;
+        const encodedMsg = encodeURIComponent(message);
+        const eventSource = new EventSource(`/api/containers/${name}/chat/stream?message=${encodedMsg}`);
+        let firstChunk = true;
+
+        eventSource.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'text') {
+                if (firstChunk) {
+                    assistantDiv.innerHTML = '';
+                    firstChunk = false;
+                }
+                appendTextToMessage(assistantDiv, data.content);
+                scrollContainerChat(chatAreaEl);
+            }
+
+            if (data.type === 'update_ready') {
+                showUpdateButton(assistantDiv, name, data.spec);
+            }
+
+            if (data.type === 'error') {
+                if (firstChunk) assistantDiv.innerHTML = '';
+                assistantDiv.classList.add('error');
+                assistantDiv.textContent = data.content;
+            }
+
+            if (data.type === 'done') {
+                eventSource.close();
+                isSending = false;
+                sendBtn.disabled = false;
+            }
+        };
+
+        eventSource.onerror = () => {
+            eventSource.close();
+            if (firstChunk) {
+                assistantDiv.innerHTML = '';
+                assistantDiv.classList.add('error');
+                assistantDiv.textContent = '❌ 接続エラー';
+            }
+            isSending = false;
+            sendBtn.disabled = false;
+        };
+
+    } catch (e) {
+        assistantDiv.innerHTML = '';
+        assistantDiv.classList.add('error');
+        assistantDiv.textContent = '❌ エラー: ' + e.message;
+        isSending = false;
+        sendBtn.disabled = false;
+    }
+}
+
+function showUpdateButton(container, name, spec) {
+    // 生のJSONテキストをクリアし、修正仕様カードを表示
+    container.innerHTML = '';
+
+    const toolsHtml = (spec.tools || []).map(t => {
+        const params = (t.parameters || []).map(p => `${p.name}: ${p.type}`).join(', ');
+        return `
+            <div class="spec-tool">
+                <div class="spec-tool-signature">
+                    🔧 <code>${escapeHtml(t.name)}(${escapeHtml(params)}) → str</code>
+                </div>
+                <p class="spec-tool-desc">${escapeHtml(t.description || '')}</p>
+            </div>`;
+    }).join('');
+
+    container.innerHTML = `
+        <div class="spec-card">
+            <div class="spec-header">📝 コード修正</div>
+            <p class="spec-description">${escapeHtml(spec.description || '')}</p>
+            ${toolsHtml ? `<div class="spec-tools"><div class="spec-tools-title">ツール一覧</div>${toolsHtml}</div>` : ''}
+            <button class="btn btn-success btn-sm" onclick="applyEdit('${escapeHtml(name)}')" style="margin-top:12px;width:100%;">
+                🚀 変更を適用 & 再ビルド
+            </button>
+        </div>`;
+}
+
+async function applyEdit(name) {
+    try {
+        const resp = await fetch(`/api/containers/${name}/chat/apply`, { method: 'POST' });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            const chatAreaEl = document.getElementById('containerChatArea');
+            if (chatAreaEl) addContainerMessage(chatAreaEl, `❌ ${data.detail}`, 'assistant error');
+            return;
+        }
+
+        const chatAreaEl = document.getElementById('containerChatArea');
+        if (chatAreaEl) {
+            addContainerMessage(chatAreaEl, `🔨 再ビルドを開始: ${data.name}`, 'assistant');
+            monitorContainerBuild(name, chatAreaEl);
+        }
+    } catch (e) {
+        const chatAreaEl = document.getElementById('containerChatArea');
+        if (chatAreaEl) addContainerMessage(chatAreaEl, `❌ エラー: ${e.message}`, 'assistant error');
+    }
+}
+
+function monitorContainerBuild(name, chatAreaEl) {
+    const progressDiv = document.createElement('div');
+    progressDiv.className = 'message assistant';
+    progressDiv.innerHTML = `
+        <div class="build-progress-container">
+            <div style="margin-bottom:8px;font-weight:600;">🔨 リビルド進捗: ${escapeHtml(name)}</div>
+            <div class="build-progress-bar">
+                <div class="build-progress-fill" id="editBuildFill" style="width:0%"></div>
+            </div>
+            <div class="build-logs" id="editBuildLogs"></div>
+        </div>`;
+    chatAreaEl.appendChild(progressDiv);
+    scrollContainerChat(chatAreaEl);
+
+    const eventSource = new EventSource(`/api/build/${encodeURIComponent(name)}/status`);
+
+    eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        const fill = document.getElementById('editBuildFill');
+        if (fill) fill.style.width = data.progress + '%';
+
+        const logs = document.getElementById('editBuildLogs');
+        if (logs && data.logs && data.logs.length > 0) {
+            for (const line of data.logs) {
+                const p = document.createElement('div');
+                p.textContent = line;
+                p.style.cssText = 'padding:2px 0;border-bottom:1px solid var(--border-color);';
+                logs.appendChild(p);
+            }
+            logs.scrollTop = logs.scrollHeight;
+        }
+        scrollContainerChat(chatAreaEl);
+
+        if (data.done) {
+            eventSource.close();
+            if (data.stage === 'completed') {
+                addContainerMessage(chatAreaEl, `✅ ${name} の再ビルド＆デプロイが完了しました！`, 'assistant');
+            } else if (data.stage === 'failed') {
+                addContainerMessage(chatAreaEl, `❌ ビルド失敗: ${data.error}`, 'assistant error');
+            }
+            loadContainers();
+        }
+    };
+
+    eventSource.onerror = () => {
+        eventSource.close();
+    };
+}
+
+function addContainerMessage(chatAreaEl, content, classes) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${classes}`;
+    messageDiv.textContent = content;
+    chatAreaEl.appendChild(messageDiv);
+    scrollContainerChat(chatAreaEl);
+}
+
+function scrollContainerChat(el) {
+    if (el) el.scrollTop = el.scrollHeight;
+}
+
+// ===== メイン画面ビルド関連 =====
+
+function appendTextToMessage(el, text) {
+    const lines = text.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        if (i > 0) el.appendChild(document.createElement('br'));
+        if (lines[i]) el.appendChild(document.createTextNode(lines[i]));
+    }
+}
+
+function showBuildButton(container, spec) {
+    // 生のJSONテキストをクリアし、仕様カードを表示
+    container.innerHTML = '';
+
+    const toolsHtml = (spec.tools || []).map(t => {
+        const params = (t.parameters || []).map(p => `${p.name}: ${p.type}`).join(', ');
+        return `
+            <div class="spec-tool">
+                <div class="spec-tool-signature">
+                    🔧 <code>${escapeHtml(t.name)}(${escapeHtml(params)}) → str</code>
+                </div>
+                <p class="spec-tool-desc">${escapeHtml(t.description || '')}</p>
+            </div>`;
+    }).join('');
+
+    const depsList = (spec.dependencies || []).length > 0
+        ? `<p class="spec-meta">📦 依存パッケージ: ${spec.dependencies.map(d => `<code>${escapeHtml(d)}</code>`).join(', ')}</p>`
+        : '';
+    const wlList = (spec.whitelist || []).length > 0
+        ? `<p class="spec-meta">🌐 許可ドメイン: ${spec.whitelist.map(d => `<code>${escapeHtml(d)}</code>`).join(', ')}</p>`
+        : '';
+
+    container.innerHTML = `
+        <div class="spec-card">
+            <div class="spec-header">📋 ${escapeHtml(spec.name)}</div>
+            <p class="spec-description">${escapeHtml(spec.description || '')}</p>
+            ${toolsHtml ? `<div class="spec-tools"><div class="spec-tools-title">ツール一覧</div>${toolsHtml}</div>` : ''}
+            ${depsList}${wlList}
+            <button class="btn btn-success" onclick="startBuildFromChat()" style="margin-top:12px;width:100%;">
+                🚀 このサーバーをビルド＆デプロイ
+            </button>
+        </div>`;
+    scrollToBottom();
+}
+
+async function startBuildFromChat() {
+    try {
+        const resp = await fetch('/api/chat/build', { method: 'POST' });
+        const data = await resp.json();
+
+        if (!resp.ok) {
+            addMessage(`❌ ${data.detail}`, 'assistant error');
+            return;
+        }
+
+        addMessage(`🔨 ビルドを開始しました: ${data.name}`, 'assistant');
+        monitorBuild(data.name);
+
+    } catch (e) {
+        addMessage('❌ ビルドリクエストエラー: ' + e.message, 'assistant error');
+    }
+}
+
+function monitorBuild(name) {
+    const progressDiv = document.createElement('div');
+    progressDiv.className = 'message assistant';
+    progressDiv.innerHTML = `
+        <div class="build-progress-container">
+            <div style="margin-bottom:8px;font-weight:600;">🔨 ビルド進捗: ${escapeHtml(name)}</div>
+            <div class="build-progress-bar">
+                <div class="build-progress-fill" id="buildProgressFill" style="width:0%"></div>
+            </div>
+            <div class="build-logs" id="buildLogs"></div>
+        </div>`;
+    chatArea.appendChild(progressDiv);
+    scrollToBottom();
+
+    const eventSource = new EventSource(`/api/build/${encodeURIComponent(name)}/status`);
+    const logsDiv = () => document.getElementById('buildLogs');
+    const progressFill = () => document.getElementById('buildProgressFill');
+
+    eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        const fill = progressFill();
+        if (fill) fill.style.width = data.progress + '%';
+
+        const logs = logsDiv();
+        if (logs && data.logs && data.logs.length > 0) {
+            for (const line of data.logs) {
+                const p = document.createElement('div');
+                p.textContent = line;
+                p.style.cssText = 'padding:2px 0;border-bottom:1px solid var(--border-color);';
+                logs.appendChild(p);
+            }
+            logs.scrollTop = logs.scrollHeight;
+        }
+        scrollToBottom();
+
+        if (data.done) {
+            eventSource.close();
+            if (data.stage === 'completed') {
+                addMessage(`✅ ${name} のビルド＆デプロイが完了しました！左のサイドバーに表示されます。`, 'assistant');
+            } else if (data.stage === 'failed') {
+                addMessage(`❌ ビルド失敗: ${data.error}`, 'assistant error');
+            }
+            loadContainers();
+        }
+    };
+
+    eventSource.onerror = () => {
+        eventSource.close();
+    };
+}
+
+function sendSuggestion(el) {
+    chatInput.value = el.textContent;
+    sendMessage();
+}
+
+function addMessage(content, classes) {
+    const welcomeMsg = chatArea.querySelector('.welcome-message');
+    if (welcomeMsg) welcomeMsg.remove();
+
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${classes}`;
+    messageDiv.textContent = content;
+    chatArea.appendChild(messageDiv);
+    scrollToBottom();
+}
+
+function scrollToBottom() {
+    chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+// ===== ユーティリティ =====
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
