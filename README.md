@@ -4,6 +4,17 @@ AI チャットで MCP (Model Context Protocol) サーバーを自動生成・�
 
 Gemini AI との対話で「天気取得APIのMCPサーバーを作って」と指示するだけで、コードの生成からセキュリティスキャン、Dockerコンテナとしてのデプロイまでを全自動で実行します。
 
+## 操作画面
+
+### チャット経由でコンテナをデプロイ
+![01_make_container](https://github.com/user-attachments/assets/e85abecd-1af8-44aa-b06d-8f31ffaa6d20)
+
+### MCPサーバをチャットから呼ぶ
+![02_usage_server](https://github.com/user-attachments/assets/c3781005-bd65-4023-a130-b6422415a982)
+
+### コンテナ内部でのコード確認・編集・セキュリティチェック
+![03_container_editor](https://github.com/user-attachments/assets/53151421-57c4-404f-8b45-07cb0964876c)
+
 ---
 
 ## 目次
