@@ -228,6 +228,7 @@ function switchTab(tabName) {
         case 'tools': loadToolsTab(currentContainer, tabContent); break;
         case 'code':  loadCodeTab(currentContainer, tabContent); break;
         case 'logs':  loadLogsTab(currentContainer, tabContent); break;
+        case 'scan':  loadScanTab(currentContainer, tabContent); break;
     }
 }
 
@@ -906,6 +907,138 @@ function monitorContainerBuild(name, chatAreaEl) {
         }
     };
     eventSource.onerror = () => { eventSource.close(); };
+}
+
+// ===== Scan タブ（Cisco mcp-scanner） =====
+function loadScanTab(name, tabContent) {
+    tabContent.innerHTML = `
+        <div class="scan-area" id="scanArea">
+            <div class="scan-header">
+                <h3>🛡️ Cisco セキュリティスキャン</h3>
+                <p class="scan-description">
+                    Cisco AI Defense 製 mcp-scanner (YARA アナライザー) を使用して、
+                    MCPツールの振る舞いレベルの脅威を動的に検出します。
+                </p>
+                <button class="btn btn-primary" id="scanBtn" onclick="runCiscoScan('${escapeHtml(name)}')">
+                    🔍 スキャン実行
+                </button>
+            </div>
+            <div class="scan-result-area" id="scanResultArea"></div>
+        </div>`;
+}
+
+async function runCiscoScan(name) {
+    const scanBtn = document.getElementById('scanBtn');
+    const resultArea = document.getElementById('scanResultArea');
+
+    scanBtn.disabled = true;
+    scanBtn.textContent = '⏳ スキャン実行中...（最大60秒）';
+    resultArea.innerHTML = `
+        <div class="scan-loading">
+            <div class="typing-indicator"><span></span><span></span><span></span></div>
+            <p>MCPサーバーを起動してツールをスキャン中...</p>
+        </div>`;
+
+    try {
+        const resp = await fetch(`/api/containers/${encodeURIComponent(name)}/scan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({}),
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            resultArea.innerHTML = `<div class="scan-error">❌ ${escapeHtml(err.detail || 'スキャンエラー')}</div>`;
+            return;
+        }
+
+        const data = await resp.json();
+        renderScanResult(resultArea, data);
+    } catch (e) {
+        resultArea.innerHTML = `<div class="scan-error">❌ 通信エラー: ${escapeHtml(e.message)}</div>`;
+    } finally {
+        scanBtn.disabled = false;
+        scanBtn.textContent = '🔍 スキャン実行';
+    }
+}
+
+function renderScanResult(container, data) {
+    const severityConfig = {
+        'SAFE':   { icon: '✅', color: '#28a745', label: '安全' },
+        'LOW':    { icon: '🔵', color: '#17a2b8', label: '低リスク' },
+        'MEDIUM': { icon: '🟡', color: '#ffc107', label: '中リスク' },
+        'HIGH':   { icon: '🔴', color: '#dc3545', label: '高リスク' },
+    };
+    const config = severityConfig[data.severity] || severityConfig['SAFE'];
+
+    // ツール別にグルーピング
+    const toolMap = {};
+    if (data.raw_results) {
+        for (const r of data.raw_results) {
+            if (r.tool_name) {
+                toolMap[r.tool_name] = {
+                    description: r.tool_description || '',
+                    is_safe: r.is_safe,
+                    findings: (data.findings || []).filter(f => f.tool_name === r.tool_name),
+                };
+            }
+        }
+    }
+
+    // ツールカード生成
+    const toolCards = Object.entries(toolMap).map(([toolName, info]) => {
+        const toolSeverity = info.is_safe ? 'SAFE' : (
+            info.findings.some(f => f.severity === 'HIGH') ? 'HIGH' :
+            info.findings.some(f => f.severity === 'MEDIUM') ? 'MEDIUM' :
+            info.findings.some(f => f.severity === 'LOW') ? 'LOW' : 'SAFE'
+        );
+        const tc = severityConfig[toolSeverity] || severityConfig['SAFE'];
+        const findingsHtml = info.findings.length > 0
+            ? info.findings.map(f => {
+                const fc = severityConfig[f.severity] || severityConfig['LOW'];
+                return `<div class="scan-finding">
+                    <span class="scan-finding-severity" style="color:${fc.color}">${fc.icon} ${f.severity}</span>
+                    <span class="scan-finding-pattern">${escapeHtml(f.pattern)}</span>
+                    <p class="scan-finding-desc">${escapeHtml(f.description)}</p>
+                </div>`;
+            }).join('')
+            : '<p class="scan-no-issues">問題は検出されませんでした</p>';
+
+        return `
+            <div class="scan-tool-card" style="border-left: 3px solid ${tc.color};">
+                <div class="scan-tool-header">
+                    <span class="scan-tool-name">🔧 ${escapeHtml(toolName)}</span>
+                    <span class="scan-tool-badge" style="background:${tc.color}15;color:${tc.color};">${tc.icon} ${tc.label}</span>
+                </div>
+                ${info.description ? `<p class="scan-tool-desc">${escapeHtml(info.description)}</p>` : ''}
+                <div class="scan-findings">${findingsHtml}</div>
+            </div>`;
+    }).join('');
+
+    // 詳細JSONセクション
+    const rawJson = data.raw_results
+        ? `<details class="scan-raw-details">
+            <summary>📊 詳細スキャン結果 (JSON)</summary>
+            <pre class="scan-raw-json">${escapeHtml(JSON.stringify(data.raw_results, null, 2))}</pre>
+           </details>`
+        : '';
+
+    container.innerHTML = `
+        <div class="scan-result-card">
+            <div class="scan-result-header" style="border-left: 4px solid ${config.color};">
+                <div class="scan-result-title">${config.icon} セキュリティスキャン結果</div>
+                <div class="scan-result-meta">
+                    <span>コンテナ: <strong>${escapeHtml(data.container_name)}</strong></span>
+                    <span class="scan-severity-badge" style="background:${config.color};color:#fff;">${data.severity}</span>
+                </div>
+                <p class="scan-summary">${escapeHtml(data.summary)}</p>
+            </div>
+            ${toolCards ? `<div class="scan-tools-section">
+                <h4>ツール別結果</h4>
+                ${toolCards}
+            </div>` : ''}
+            ${rawJson}
+        </div>`;
 }
 
 // ===== メッセージ追加 =====

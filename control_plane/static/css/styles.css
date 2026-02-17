@@ -927,6 +927,207 @@ body {
 .text-center { text-align: center; }
 .hidden { display: none !important; }
 
+/* ===== Cisco セキュリティスキャン ===== */
+.scan-area {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 16px;
+    gap: 16px;
+    overflow-y: auto;
+}
+
+.scan-header {
+    text-align: center;
+    padding: 20px;
+}
+
+.scan-header h3 {
+    margin: 0 0 8px;
+    font-size: 1.2rem;
+}
+
+.scan-description {
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+    margin-bottom: 16px;
+    line-height: 1.5;
+}
+
+.scan-loading {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-secondary);
+}
+
+.scan-loading p {
+    margin-top: 12px;
+    font-size: 0.9rem;
+}
+
+.scan-error {
+    padding: 16px;
+    background: #fef2f2;
+    color: #991b1b;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+.scan-result-card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.scan-result-header {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.scan-result-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 12px;
+}
+
+.scan-result-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 0.9rem;
+}
+
+.scan-severity-badge {
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 20px;
+    letter-spacing: 0.05em;
+}
+
+.scan-summary {
+    font-size: 0.95rem;
+    margin-top: 8px;
+    line-height: 1.5;
+}
+
+.scan-tools-section h4 {
+    font-size: 0.95rem;
+    margin: 0 0 12px;
+    color: var(--text-secondary);
+}
+
+.scan-tool-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 12px;
+    transition: box-shadow 0.2s ease;
+}
+
+.scan-tool-card:hover {
+    box-shadow: var(--shadow-lg);
+}
+
+.scan-tool-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.scan-tool-name {
+    font-weight: 600;
+    font-size: 1rem;
+}
+
+.scan-tool-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 2px 10px;
+    border-radius: 12px;
+}
+
+.scan-tool-desc {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.scan-findings {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.scan-finding {
+    padding: 10px 12px;
+    background: var(--bg-color);
+    border-radius: 8px;
+    font-size: 0.88rem;
+}
+
+.scan-finding-severity {
+    font-weight: 700;
+    margin-right: 8px;
+}
+
+.scan-finding-pattern {
+    font-family: 'Fira Code', monospace;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.scan-finding-desc {
+    margin: 4px 0 0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.scan-no-issues {
+    color: #28a745;
+    font-size: 0.88rem;
+    margin: 0;
+}
+
+.scan-raw-details {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 12px 16px;
+}
+
+.scan-raw-details summary {
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    padding: 4px 0;
+}
+
+.scan-raw-details summary:hover {
+    color: var(--text-color);
+}
+
+.scan-raw-json {
+    margin-top: 12px;
+    padding: 12px;
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    overflow-x: auto;
+    max-height: 400px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
 /* ===== レスポンシブ ===== */
 @media (max-width: 768px) {
     .sidebar {

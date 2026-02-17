@@ -122,10 +122,10 @@ graph TB
         CP_c --- TRV
     end
 
-    subgraph net_internal["mcp-internal (172.20.0.0/16, internal: true)"]
+    subgraph net_internal["mcp-internal (internal)"]
         CP_i["control-plane"]
-        MCP1["MCP-A<br/>.0.10"]
-        MCP2["MCP-B<br/>.0.11"]
+        MCP1["MCP-A<br/>172.20.0.10"]
+        MCP2["MCP-B<br/>172.20.0.11"]
         SQ_i["squid"]
         MCP1 -->|"proxy"| SQ_i
         MCP2 -->|"proxy"| SQ_i
