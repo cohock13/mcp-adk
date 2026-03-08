@@ -1,0 +1,2 @@
+api.open-meteo.com
+geocoding-api.open-meteo.com
